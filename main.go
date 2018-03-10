@@ -11,6 +11,7 @@ import (
 func main() {
 	serverAddr := flag.String("server", "localhost:30303", "ngrak instanse address")
 	proxyAddr := flag.String("proxy", "localhost:80", "proxy requests to")
+	customID := flag.String("id", "", "custom id")
 	flag.Parse()
 	conn, err := net.Dial("tcp", *serverAddr)
 	log.Printf("Connected to %v", *serverAddr)
@@ -18,6 +19,9 @@ func main() {
 
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *customID != "" {
+		_, err = conn.Write([]byte(fmt.Sprintf("~!@=%v=@!~", *customID)))
 	}
 
 	idRegex, _ := regexp.Compile("^~!@=([a-z0-9]+)=@!~$")
