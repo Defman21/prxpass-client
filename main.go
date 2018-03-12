@@ -42,6 +42,7 @@ func main() {
 	serverAddr := flag.String("server", "test.loc:30303", "PrxPass server address")
 	proxyAddr := flag.String("proxy-to", "localhost:80", "Where to proxy requests")
 	customID := flag.String("id", "", "Custom client ID")
+	password := flag.String("password", "", "Server password")
 	flag.Parse()
 	conn, err := net.Dial("tcp", *serverAddr)
 	log.Printf("Connected to %v", *serverAddr)
@@ -56,7 +57,7 @@ func main() {
 		Version: 1,
 		RPC: rpcCall{
 			Method: "net/register",
-			Args:   []string{*customID},
+			Args:   []string{*customID, *password},
 		},
 	})
 
@@ -74,6 +75,8 @@ func main() {
 				switch msgObj.RPC.Method {
 				case "net/notify":
 					log.Println("Your ID:", msgObj.RPC.Args[0])
+				case "net/auth-reject":
+					log.Println(msgObj.RPC.Args[0])
 				case "tcp/request":
 					writeConn, err := net.Dial("tcp", *proxyAddr)
 					log.Println("Proxy-pass the request to", *proxyAddr)
