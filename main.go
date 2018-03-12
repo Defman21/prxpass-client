@@ -1,12 +1,42 @@
 package main
 
 import (
+	"bytes"
 	"flag"
-	"fmt"
+	"github.com/vmihailenco/msgpack"
 	"log"
 	"net"
-	"regexp"
 )
+
+type rpcCall struct {
+	Method string
+	Args   []string
+}
+
+type message struct {
+	Sender  string
+	Version int
+	RPC     rpcCall
+}
+
+func formatMessage(msgpackBytes []byte) []byte {
+	return append([]byte("!msgpack:"), msgpackBytes...)
+}
+
+func parseMessage(msg []byte) (*message, bool, error) {
+	if bytes.HasPrefix(msg, []byte("!msgpack:")) {
+		var obj message
+		err := msgpack.Unmarshal(msg[9:], &obj)
+		if err != nil {
+			return nil, false, err
+		}
+		if obj.Version == 0 {
+			return nil, false, nil
+		}
+		return &obj, true, nil
+	}
+	return nil, false, nil
+}
 
 func main() {
 	serverAddr := flag.String("server", "localhost:30303", "ngrak instanse address")
@@ -20,11 +50,17 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if *customID != "" {
-		_, err = conn.Write([]byte(fmt.Sprintf("~!@=%v=@!~", *customID)))
-	}
 
-	idRegex, _ := regexp.Compile("^~!@=([a-z0-9]+)=@!~$")
+	bytes, err := msgpack.Marshal(&message{
+		Sender:  "client",
+		Version: 1,
+		RPC: rpcCall{
+			Method: "net/register",
+			Args:   []string{*customID},
+		},
+	})
+
+	_, err = conn.Write(formatMessage(bytes))
 
 	reply := make([]byte, 2048)
 	for {
@@ -34,33 +70,47 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		} else {
-			log.Println(string(reply[:n]))
+			if msgObj, isMsgpack, _ := parseMessage(reply[:n]); isMsgpack {
+				switch msgObj.RPC.Method {
+				case "net/notify":
+					log.Println("Your ID:", msgObj.RPC.Args[0])
+				case "tcp/request":
+					writeConn, err := net.Dial("tcp", *proxyAddr)
+					log.Println("Proxy-pass the request to", *proxyAddr)
 
-			if id := idRegex.FindSubmatch(reply[:n]); id != nil {
-				log.Printf("Your ID: %v", string(id[1]))
-				continue
-			}
-			writeconn, err := net.Dial("tcp", *proxyAddr)
-			log.Printf("Proxy-pass data to %v", *proxyAddr)
-			if err != nil {
-				fmt.Println(err)
-			} else {
-				_, err = writeconn.Write(reply[:n])
-				if err != nil {
-					fmt.Println(err)
-				} else {
-					n, err := writeconn.Read(reply)
 					if err != nil {
-						fmt.Println(err)
-					} else {
-						data := reply[:n]
-						log.Printf("Sending data back: %v", string(data))
-						_, err := conn.Write(data)
-						if err != nil {
-							log.Fatal("zulul")
-						}
+						log.Println("Proxy-pass connection failed:", err)
+						continue
 					}
-					writeconn.Close()
+					_, err = writeConn.Write([]byte(msgObj.RPC.Args[0]))
+					if err != nil {
+						log.Println("Proxy-pass write failed:", err)
+						continue
+					}
+					n, err := writeConn.Read(reply)
+					if err != nil {
+						log.Println("Proxy-pass read failed:", err)
+						continue
+					}
+					httpResponse := reply[:n]
+					msgpRequest, err := msgpack.Marshal(&message{
+						Sender:  "client",
+						Version: 1,
+						RPC: rpcCall{
+							Method: "tcp/response",
+							Args:   []string{string(httpResponse)},
+						},
+					})
+					if err != nil {
+						log.Println("Failed to create a msgpack object:", err)
+						continue
+					}
+					_, err = conn.Write(formatMessage(msgpRequest))
+					if err != nil {
+						log.Println("Failed to RPC:tcp/response:", err)
+						continue
+					}
+					writeConn.Close()
 				}
 			}
 		}

@@ -23,7 +23,7 @@
 #   non-go = false
 #   go-tests = true
 #   unused-packages = true
-
+ignored = ["google.golang.org/appengine*"]
 
 [prune]
   go-tests = true
