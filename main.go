@@ -39,9 +39,9 @@ func parseMessage(msg []byte) (*message, bool, error) {
 }
 
 func main() {
-	serverAddr := flag.String("server", "localhost:30303", "ngrak instanse address")
-	proxyAddr := flag.String("proxy", "localhost:80", "proxy requests to")
-	customID := flag.String("id", "", "custom id")
+	serverAddr := flag.String("server", "test.loc:30303", "PrxPass server address")
+	proxyAddr := flag.String("proxy-to", "localhost:80", "Where to proxy requests")
+	customID := flag.String("id", "", "Custom client ID")
 	flag.Parse()
 	conn, err := net.Dial("tcp", *serverAddr)
 	log.Printf("Connected to %v", *serverAddr)
