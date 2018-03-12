@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"flag"
+	"fmt"
 	"github.com/vmihailenco/msgpack"
 	"log"
 	"net"
+	"strings"
 )
 
 type rpcCall struct {
@@ -43,6 +45,8 @@ func main() {
 	proxyAddr := flag.String("proxy-to", "localhost:80", "Where to proxy requests")
 	customID := flag.String("id", "", "Custom client ID")
 	password := flag.String("password", "", "Server password")
+	serverHost := strings.Split(*serverAddr, ":")[0]
+	proxyHost := strings.Split(*proxyAddr, ":")[0]
 	flag.Parse()
 	conn, err := net.Dial("tcp", *serverAddr)
 	log.Printf("Connected to %v", *serverAddr)
@@ -64,6 +68,7 @@ func main() {
 	_, err = conn.Write(formatMessage(bytes))
 
 	reply := make([]byte, 2048)
+	var id string
 	for {
 
 		n, err := conn.Read(reply)
@@ -75,17 +80,19 @@ func main() {
 				switch msgObj.RPC.Method {
 				case "net/notify":
 					log.Println("Your ID:", msgObj.RPC.Args[0])
+					id = msgObj.RPC.Args[0]
 				case "net/auth-reject":
 					log.Println(msgObj.RPC.Args[0])
 				case "tcp/request":
 					writeConn, err := net.Dial("tcp", *proxyAddr)
-					log.Println("Proxy-pass the request to", *proxyAddr)
+					request := strings.Replace(msgObj.RPC.Args[0], fmt.Sprintf("Host: %v.%v", id, serverHost), fmt.Sprintf("Host: %v", proxyHost), -1)
+					log.Printf("%+v", request)
 
 					if err != nil {
 						log.Println("Proxy-pass connection failed:", err)
 						continue
 					}
-					_, err = writeConn.Write([]byte(msgObj.RPC.Args[0]))
+					_, err = writeConn.Write([]byte(request))
 					if err != nil {
 						log.Println("Proxy-pass write failed:", err)
 						continue
