@@ -1,16 +1,20 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"flag"
 	"fmt"
 	"github.com/vmihailenco/msgpack"
 	"log"
 	"net"
+	"net/http"
+	"net/http/httputil"
+	"regexp"
 	"strings"
 )
 
-type rpcCall struct {
+type RPC struct {
 	Method string
 	Args   []string
 }
@@ -18,7 +22,7 @@ type rpcCall struct {
 type message struct {
 	Sender  string
 	Version int
-	RPC     rpcCall
+	RPC
 }
 
 func formatMessage(msgpackBytes []byte) []byte {
@@ -45,12 +49,12 @@ func main() {
 	proxyAddr := flag.String("proxy-to", "localhost:80", "Where to proxy requests")
 	customID := flag.String("id", "", "Custom client ID")
 	password := flag.String("password", "", "Server password")
-	serverHost := strings.Split(*serverAddr, ":")[0]
 	proxyHost := strings.Split(*proxyAddr, ":")[0]
 	flag.Parse()
 	conn, err := net.Dial("tcp", *serverAddr)
 	log.Printf("Connected to %v", *serverAddr)
 	log.Printf("Proxying to %v", *proxyAddr)
+	hostRegexp := regexp.MustCompile("Host: .+")
 
 	if err != nil {
 		log.Fatal(err)
@@ -59,7 +63,7 @@ func main() {
 	bytes, err := msgpack.Marshal(&message{
 		Sender:  "client",
 		Version: 1,
-		RPC: rpcCall{
+		RPC: RPC{
 			Method: "net/register",
 			Args:   []string{*customID, *password},
 		},
@@ -68,7 +72,6 @@ func main() {
 	_, err = conn.Write(formatMessage(bytes))
 
 	reply := make([]byte, 2048)
-	var id string
 	for {
 
 		n, err := conn.Read(reply)
@@ -80,12 +83,43 @@ func main() {
 				switch msgObj.RPC.Method {
 				case "net/notify":
 					log.Println("Your ID:", msgObj.RPC.Args[0])
-					id = msgObj.RPC.Args[0]
 				case "net/auth-reject":
 					log.Println(msgObj.RPC.Args[0])
-				case "tcp/request":
+				case "http/request":
+					request := hostRegexp.ReplaceAllString(msgObj.RPC.Args[0], fmt.Sprintf("Host: %v", proxyHost))
+					log.Printf("%+v", request)
+					requestObj, _ := http.ReadRequest(bufio.NewReader(strings.NewReader(request)))
+					requestObj.URL.Host = *proxyAddr
+					requestObj.URL.Scheme = "http"
+					log.Printf("%+v", requestObj)
+					res, err := http.DefaultTransport.RoundTrip(requestObj)
+					if err != nil {
+						panic(err)
+					}
+					httpResponse, err := httputil.DumpResponse(res, true)
+					if err != nil {
+						panic(err)
+					}
+					msgpRequest, err := msgpack.Marshal(&message{
+						Sender:  "client",
+						Version: 1,
+						RPC: RPC{
+							Method: "http/response",
+							Args:   []string{string(httpResponse)},
+						},
+					})
+					if err != nil {
+						log.Println("Failed to create a msgpack object:", err)
+						continue
+					}
+					_, err = conn.Write(formatMessage(msgpRequest))
+					if err != nil {
+						log.Println("Failed to RPC:http/response:", err)
+						continue
+					}
+				case "net/request":
 					writeConn, err := net.Dial("tcp", *proxyAddr)
-					request := strings.Replace(msgObj.RPC.Args[0], fmt.Sprintf("Host: %v.%v", id, serverHost), fmt.Sprintf("Host: %v", proxyHost), -1)
+					request := msgObj.RPC.Args[0]
 					log.Printf("%+v", request)
 
 					if err != nil {
@@ -102,13 +136,13 @@ func main() {
 						log.Println("Proxy-pass read failed:", err)
 						continue
 					}
-					httpResponse := reply[:n]
+					tcpResponse := reply[:n]
 					msgpRequest, err := msgpack.Marshal(&message{
 						Sender:  "client",
 						Version: 1,
-						RPC: rpcCall{
+						RPC: RPC{
 							Method: "tcp/response",
-							Args:   []string{string(httpResponse)},
+							Args:   []string{string(tcpResponse)},
 						},
 					})
 					if err != nil {
